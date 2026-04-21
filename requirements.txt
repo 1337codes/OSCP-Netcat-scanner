@@ -1,0 +1,51 @@
+# ncscanner — pip3 install -r requirements.txt
+# Python >= 3.10 required
+
+# ── No mandatory third-party packages ────────────────────────────────────────
+# ncscanner is intentionally stdlib-only so it runs on any Kali/Parrot install
+# without a virtualenv.  All scanning is done via socket / subprocess calls to
+# the OS tools below.
+#
+# Optional — install these if you want richer output:
+# colorama         # fallback ANSI colours on Windows terminals
+# requests         # only needed if you extend the scanner with HTTP helpers
+# urllib3          # requests dep — pinned for consistent TLS behaviour
+
+# ── System tools (apt / pacman — NOT pip) ────────────────────────────────────
+# The scanner calls these as subprocesses; make sure they are on PATH:
+#
+#   sudo apt-get install -y \
+#     nmap ncat netcat-openbsd \
+#     whatweb wafw00f \
+#     gobuster feroxbuster ffuf wfuzz \
+#     enum4linux-ng smbmap smbclient \
+#     ldap-utils \
+#     nikto \
+#     wpscan \
+#     sslscan testssl.sh \
+#     snmp \
+#     nbtscan \
+#     nxc crackmapexec \
+#     impacket-scripts \
+#     evil-winrm \
+#     searchsploit exploitdb \
+#     bloodhound-python \
+#     john hashcat \
+#     hydra medusa \
+#     curl wget \
+#     python3-impacket \
+#     git \
+#     iis-shortname-scanner    # pip3 install iis-shortname-scanner  OR  clone from GitHub
+
+# ── Wordlists (download once) ─────────────────────────────────────────────────
+#   sudo apt-get install seclists wordlists
+#   gzip -d /usr/share/wordlists/rockyou.txt.gz
+#
+# Key wordlists used by ncscanner:
+#   /usr/share/wordlists/dirb/common.txt
+#   /usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt
+#   /usr/share/seclists/Discovery/Web-Content/raft-large-directories.txt
+#   /usr/share/seclists/Discovery/Web-Content/raft-large-words.txt
+#   /usr/share/seclists/Discovery/Web-Content/raft-large-directories-combined.txt
+#   /usr/share/seclists/Discovery/Web-Content/raft-large-directories-lowercase-combined.txt
+#   /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt

